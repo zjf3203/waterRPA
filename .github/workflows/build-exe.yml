@@ -1,0 +1,33 @@
+name: 打包 waterRPA 成 exe
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # 允许手动点击打包
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 打包成 exe
+        run: pyinstaller -w -F --icon=logo.ico --add-data "ui;ui" --add-data "resource;resource" main.py
+
+      - name: 上传 exe 成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: waterRPA-exe
+          path: dist/main.exe
