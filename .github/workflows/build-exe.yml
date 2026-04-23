@@ -20,17 +20,17 @@ jobs:
       - name: 升级 pip
         run: python -m pip install --upgrade pip
 
-      - name: 安装项目依赖
+      - name: 安装依赖
         run: |
           pip install pyqt5
           pip install pyinstaller
 
-      - name: 执行打包（修复版命令）
+      - name: 开始打包（修复正确文件名）
         run: |
-          pyinstaller -w -F --icon="logo.ico" --add-data "ui;ui" --add-data "resource;resource" main.py
+          pyinstaller -w -F --icon="logo.ico" --add-data "ui;ui" --add-data "resource;resource" Water.py
 
-      - name: 上传打包好的 exe
+      - name: 上传 exe
         uses: actions/upload-artifact@v4
         with:
           name: waterRPA-exe
-          path: dist/main.exe
+          path: dist/Water.exe
