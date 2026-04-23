@@ -8,13 +8,11 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: waterRPA  # 关键：进入子文件夹
     steps:
-      - uses: actions/checkout@v4
+      - name: 拉取代码
+        uses: actions/checkout@v4
 
-      - name: 安装 Python
+      - name: 安装 Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -24,12 +22,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyqt5 pyinstaller
 
-      - name: 打包 exe
+      - name: 执行打包
         run: |
           pyinstaller -w -F --icon="logo.ico" --add-data "ui;ui" --add-data "resource;resource" Water.py
 
-      - name: 上传成品
+      - name: 上传 exe
         uses: actions/upload-artifact@v4
         with:
           name: waterRPA-exe
-          path: waterRPA/dist/Water.exe
+          path: dist/Water.exe
