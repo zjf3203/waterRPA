@@ -2,21 +2,20 @@ import sys
 import os
 import time
 import json
+import traceback
 import pyautogui
 import pyperclip
-import traceback
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea,
     QFileDialog, QTextEdit, QMessageBox, QFrame
 )
-from PySide6.QtCore import Qt, QThread, Signal, QPoint, QRect
-from PySide6.QtGui import QPainter, QPen, QColor, QGuiApplication, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QPoint, QRect, QTimer
+from PySide6.QtGui import QPainter, QPen, QColor, QGuiApplication, QPixmap, QMouseEvent
 
 # --------------------------
-# 核心逻辑 (原 waterRPA.py)
+# 核心 RPA 逻辑（不变）
 # --------------------------
-
 def mouseClick(clickTimes, lOrR, img, reTry, timeout=60):
     start_time = time.time()
     if reTry == 1:
@@ -140,66 +139,91 @@ class RPAEngine:
                 callback_msg("任务结束")
 
 # --------------------------
-# 截图选区窗口（微信式）
+# 稳定版：区域截图窗口（修复崩溃）
 # --------------------------
 class SnipWindow(QWidget):
-    def __init__(self, full_pix):
-        super().__init__()
+    def __init__(self, full_pix, parent=None):
+        super().__init__(parent)
         self.full_pix = full_pix
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.showFullScreen()
-        self.setCursor(Qt.CrossCursor)
         self.start = QPoint()
         self.end = QPoint()
-        self.painter = QPainter()
+        self.is_dragging = False
+
+        # 窗口属性：全屏、置顶、无边框
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setCursor(Qt.CrossCursor)
+        self.showFullScreen()
+
     def paintEvent(self, e):
-        self.painter.begin(self)
-        self.painter.drawPixmap(0, 0, self.full_pix)
-        self.painter.fillRect(self.rect(), QColor(0,0,0,120))
+        painter = QPainter(self)
+        # 绘制全屏背景
+        painter.drawPixmap(0, 0, self.full_pix)
+        # 半透明遮罩
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 140))
+
         if not self.start.isNull() and not self.end.isNull():
             rect = QRect(self.start, self.end).normalized()
-            self.painter.setCompositionMode(self.painter.CompositionMode_Clear)
-            self.painter.fillRect(rect, Qt.transparent)
-            self.painter.setCompositionMode(self.painter.CompositionMode_SourceOver)
-            self.painter.setPen(QPen(QColor(0,255,0), 2))
-            self.painter.drawRect(rect)
-        self.painter.end()
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self.start = e.globalPos()
-            self.end = e.globalPos()
+            # 清空选中区域（透明）
+            painter.setCompositionMode(QPainter.CompositionMode_Clear)
+            painter.fillRect(rect, Qt.transparent)
+            # 画绿色边框
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            painter.setPen(QPen(QColor(0, 255, 0), 2))
+            painter.drawRect(rect)
+
+    def mousePressEvent(self, ev: QMouseEvent):
+        if ev.button() == Qt.LeftButton:
+            self.start = ev.globalPos()
+            self.end = self.start
+            self.is_dragging = True
             self.update()
-    def mouseMoveEvent(self, e):
-        if not self.start.isNull():
-            self.end = e.globalPos()
+
+    def mouseMoveEvent(self, ev: QMouseEvent):
+        if self.is_dragging:
+            self.end = ev.globalPos()
             self.update()
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self.end = e.globalPos()
+
+    def mouseReleaseEvent(self, ev: QMouseEvent):
+        if ev.button() == Qt.LeftButton and self.is_dragging:
+            self.is_dragging = False
+            self.end = ev.globalPos()
             rect = QRect(self.start, self.end).normalized()
             if rect.width() > 5 and rect.height() > 5:
-                self.crop_and_save(rect)
+                self.save_crop(rect)
             self.close()
-    def keyPressEvent(self, e):
-        if e.key() == Qt.Key_Escape:
+
+    def keyPressEvent(self, ev):
+        if ev.key() == Qt.Key_Escape:
             self.close()
-    def crop_and_save(self, rect):
-        save_dir = "screenshots"
-        os.makedirs(save_dir, exist_ok=True)
-        fn = f"snip_{int(time.time())}.png"
-        path = os.path.join(save_dir, fn)
-        cropped = self.full_pix.copy(rect)
-        cropped.save(path, "png")
-        QMessageBox.information(None, "截图成功", f"已保存：\n{path}")
+
+    def save_crop(self, rect):
+        try:
+            save_dir = "screenshots"
+            os.makedirs(save_dir, exist_ok=True)
+            filename = f"snip_{int(time.time())}.png"
+            path = os.path.join(save_dir, filename)
+            cropped = self.full_pix.copy(rect)
+            cropped.save(path, "png")
+            QMessageBox.information(None, "截图成功", f"已保存：\n{path}")
+        except Exception as e:
+            QMessageBox.critical(None, "截图失败", str(e))
 
 # --------------------------
-# GUI 界面
+# GUI 主体
 # --------------------------
 CMD_TYPES = {
-    "左键单击":1.0,"左键双击":2.0,"右键单击":3.0,"输入文本":4.0,
-    "等待(秒)":5.0,"滚轮滑动":6.0,"系统按键":7.0,"鼠标悬停":8.0,"截图保存":9.0
+    "左键单击": 1.0,
+    "左键双击": 2.0,
+    "右键单击": 3.0,
+    "输入文本": 4.0,
+    "等待(秒)": 5.0,
+    "滚轮滑动": 6.0,
+    "系统按键": 7.0,
+    "鼠标悬停": 8.0,
+    "截图保存": 9.0
 }
-CMD_TYPES_REV = {v:k for k,v in CMD_TYPES.items()}
+CMD_TYPES_REV = {v: k for k, v in CMD_TYPES.items()}
 
 class WorkerThread(QThread):
     log_signal = Signal(str)
@@ -226,10 +250,11 @@ class TaskRow(QFrame):
         self.type_combo.currentTextChanged.connect(self.on_change)
         self.value_input = QLineEdit()
         self.file_btn = QPushButton("选择图片")
+        self.file_btn.clicked.connect(self.select_file)
         self.retry_input = QLineEdit("1")
         self.retry_input.setFixedWidth(100)
         self.del_btn = QPushButton("X")
-        self.del_btn.setStyleSheet("color:red")
+        self.del_btn.setStyleSheet("color:red; font-weight:bold;")
         self.del_btn.clicked.connect(lambda: delete_callback(self))
         layout.addWidget(self.type_combo)
         layout.addWidget(self.value_input)
@@ -238,6 +263,7 @@ class TaskRow(QFrame):
         layout.addWidget(self.del_btn)
         parent_layout.addWidget(self)
         self.on_change(self.type_combo.currentText())
+
     def on_change(self, text):
         t = CMD_TYPES[text]
         show_file = t in (1,2,3,8,9)
@@ -258,32 +284,46 @@ class TaskRow(QFrame):
         elif t == 9:
             self.file_btn.setText("选择文件夹")
             self.value_input.setPlaceholderText("保存目录")
-    def set_data(self, d):
-        t = d.get("type")
-        if t in CMD_TYPES_REV:
-            self.type_combo.setCurrentText(CMD_TYPES_REV[t])
-        self.value_input.setText(str(d.get("value","")))
-        self.retry_input.setText(str(d.get("retry","1")))
+
+    def select_file(self):
+        t = CMD_TYPES[self.type_combo.currentText()]
+        if t == 9:
+            folder = QFileDialog.getExistingDirectory(self, "选择保存目录")
+            if folder:
+                self.value_input.setText(folder)
+        else:
+            fname, _ = QFileDialog.getOpenFileName(self, "选择图片", filter="Images (*.png *.jpg)")
+            if fname:
+                self.value_input.setText(fname)
+
     def get_data(self):
         return {
             "type": CMD_TYPES[self.type_combo.currentText()],
             "value": self.value_input.text().strip(),
             "retry": int(self.retry_input.text().strip()) if self.retry_input.isVisible() else 1
         }
-    def select_file(self):
-        pass
+
+    def set_data(self, d):
+        t = d.get("type")
+        if t in CMD_TYPES_REV:
+            self.type_combo.setCurrentText(CMD_TYPES_REV[t])
+        self.value_input.setText(str(d.get("value", "")))
+        self.retry_input.setText(str(d.get("retry", "1")))
 
 class RPAWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("不高兴就喝水 RPA 配置工具")
-        self.resize(800,600)
+        self.setWindowTitle("RPA 配置工具")
+        self.resize(900, 650)
         self.engine = RPAEngine()
         self.worker = None
         self.rows = []
-        w = QWidget()
-        self.setCentralWidget(w)
-        main_layout = QVBoxLayout(w)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+
+        # 顶部工具栏
         top_bar = QHBoxLayout()
         self.add_btn = QPushButton("+ 新增指令")
         self.add_btn.clicked.connect(self.add_row)
@@ -292,21 +332,21 @@ class RPAWindow(QMainWindow):
         self.load_btn = QPushButton("导入配置")
         self.load_btn.clicked.connect(self.load_config)
 
-        # ========== 区域截图按钮（真正微信式） ==========
-        self.snip_btn = QPushButton("区域截图")
-        self.snip_btn.setStyleSheet("background:#FF9800;color:white")
+        # 稳定版区域截图按钮
+        self.snip_btn = QPushButton("截图")
+        self.snip_btn.setStyleSheet("background:#FF9800; color:white; padding:4px 8px;")
         self.snip_btn.clicked.connect(self.start_snip)
-        # ==============================================
 
         self.loop_sel = QComboBox()
-        self.loop_sel.addItems(["执行一次","循环执行"])
+        self.loop_sel.addItems(["执行一次", "循环执行"])
         self.start_btn = QPushButton("开始运行")
-        self.start_btn.setStyleSheet("background:#4CAF50;color:white")
+        self.start_btn.setStyleSheet("background:#4CAF50; color:white;")
         self.start_btn.clicked.connect(self.start_task)
         self.stop_btn = QPushButton("停止")
-        self.stop_btn.setStyleSheet("background:#f44333;color:white")
+        self.stop_btn.setStyleSheet("background:#f44333; color:white;")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop_task)
+
         top_bar.addWidget(self.add_btn)
         top_bar.addWidget(self.save_btn)
         top_bar.addWidget(self.load_btn)
@@ -316,97 +356,118 @@ class RPAWindow(QMainWindow):
         top_bar.addWidget(self.start_btn)
         top_bar.addWidget(self.stop_btn)
         main_layout.addLayout(top_bar)
-        self.scroll = QScrollArea()
-        self.content = QWidget()
-        self.layout = QVBoxLayout(self.content)
-        self.layout.addStretch()
-        self.scroll.setWidget(self.content)
-        self.scroll.setWidgetResizable(True)
-        main_layout.addWidget(self.scroll)
-        self.log_label = QLabel("运行日志:")
+
+        # 任务列表
+        scroll = QScrollArea()
+        self.task_widget = QWidget()
+        self.task_layout = QVBoxLayout(self.task_widget)
+        self.task_layout.addStretch()
+        scroll.setWidget(self.task_widget)
+        scroll.setWidgetResizable(True)
+        main_layout.addWidget(scroll)
+
+        # 日志
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-        self.log_area.setMaximumHeight(150)
-        main_layout.addWidget(self.log_label)
+        self.log_area.setMaximumHeight(160)
+        main_layout.addWidget(QLabel("运行日志："))
         main_layout.addWidget(self.log_area)
+
         self.add_row()
 
     def start_snip(self):
+        # 最小化主窗口 → 延迟 → 抓屏 → 打开截图窗口
         self.showMinimized()
-        time.sleep(0.2)
-        screen = QGuiApplication.primaryScreen()
-        full = screen.grabWindow(0)
-        self.snip_win = SnipWindow(full)
-        self.snip_win.show()
+        QTimer.singleShot(300, self.do_snip)
 
-    def add_row(self, d=None):
-        self.layout.takeAt(self.layout.count()-1)
-        row = TaskRow(self.layout, self.delete_row)
-        if d:
-            row.set_data(d)
+    def do_snip(self):
+        try:
+            screen = QGuiApplication.primaryScreen()
+            full_pix = screen.grabWindow(0)
+            self.snip_win = SnipWindow(full_pix)
+            self.snip_win.show()
+        except Exception as e:
+            QMessageBox.critical(self, "截图失败", str(e))
+        finally:
+            # 截图窗口关闭后再显示主窗口（用单次定时器）
+            QTimer.singleShot(100, self.showNormal)
+
+    def add_row(self, data=None):
+        self.task_layout.takeAt(self.task_layout.count() - 1)
+        row = TaskRow(self.task_layout, self.delete_row)
+        if data:
+            row.set_data(data)
         self.rows.append(row)
-        self.layout.addStretch()
+        self.task_layout.addStretch()
+
     def delete_row(self, row):
         self.rows.remove(row)
         row.deleteLater()
+
     def save_config(self):
         tasks = [r.get_data() for r in self.rows]
         if not tasks:
-            QMessageBox.warning(self,"提示","无任务")
+            QMessageBox.warning(self, "提示", "没有可保存的指令")
             return
-        fn, _ = QFileDialog.getSaveFileName(self,"保存","","JSON (*.json)")
-        if fn:
-            with open(fn,"w",encoding="utf-8") as f:
-                json.dump(tasks,f,indent=4,ensure_ascii=False)
-            QMessageBox.information(self,"成功","配置已保存")
+        fname, _ = QFileDialog.getSaveFileName(self, "保存配置", filter="JSON (*.json)")
+        if fname:
+            with open(fname, "w", encoding="utf-8") as f:
+                json.dump(tasks, f, indent=4, ensure_ascii=False)
+            QMessageBox.information(self, "成功", "配置已保存")
+
     def load_config(self):
-        fn, _ = QFileDialog.getOpenFileName(self,"导入","","JSON (*.json)")
-        if not fn:
+        fname, _ = QFileDialog.getOpenFileName(self, "导入配置", filter="JSON (*.json)")
+        if not fname:
             return
         try:
-            with open(fn,encoding="utf-8") as f:
+            with open(fname, encoding="utf-8") as f:
                 tasks = json.load(f)
             for r in self.rows:
                 r.deleteLater()
             self.rows.clear()
             for t in tasks:
                 self.add_row(t)
-            QMessageBox.information(self,"成功",f"导入 {len(tasks)} 条")
+            QMessageBox.information(self, "成功", f"导入 {len(tasks)} 条指令")
         except:
-            QMessageBox.critical(self,"失败","格式错误")
+            QMessageBox.critical(self, "失败", "配置文件格式错误")
+
     def start_task(self):
         tasks = []
         for r in self.rows:
             d = r.get_data()
             if not d["value"]:
-                QMessageBox.warning(self,"提示","有空参数")
+                QMessageBox.warning(self, "警告", "存在空参数指令")
                 return
             tasks.append(d)
         if not tasks:
-            QMessageBox.warning(self,"提示","至少一条")
+            QMessageBox.warning(self, "警告", "至少添加一条指令")
             return
         self.log_area.clear()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.add_btn.setEnabled(False)
-        loop = self.loop_sel.currentText() == "循环执行"
+        loop = (self.loop_sel.currentText() == "循环执行")
         self.worker = WorkerThread(self.engine, tasks, loop)
         self.worker.log_signal.connect(self.log)
-        self.worker.finished_signal.connect(self.on_finish)
+        self.worker.finished_signal.connect(self.on_finished)
         self.worker.start()
         self.showMinimized()
+
     def stop_task(self):
         self.engine.stop()
         self.log("正在停止...")
-    def on_finish(self):
+
+    def on_finished(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.add_btn.setEnabled(True)
         self.log("任务已结束")
         self.showNormal()
+
     def log(self, msg):
         self.log_area.append(msg)
-    def closeEvent(self,e):
+
+    def closeEvent(self, e):
         if self.worker and self.worker.isRunning():
             self.engine.stop()
             self.worker.quit()
