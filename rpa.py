@@ -8,7 +8,8 @@ import traceback
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QLabel, QComboBox, QLineEdit, QScrollArea, 
                                QFileDialog, QTextEdit, QMessageBox, QFrame)
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QGuiApplication, QPixmap
 
 # --------------------------
 # 核心逻辑 (原 waterRPA.py)
@@ -395,13 +396,13 @@ class RPAWindow(QMainWindow):
         self.load_btn.clicked.connect(self.load_config)
         top_bar.addWidget(self.load_btn)
 
-        # ========== 【新增：截图按钮】 ==========
-        self.screenshot_btn = QPushButton("截图")
-        self.screenshot_btn.setStyleSheet("background-color: #2196F3; color: white;")
-        self.screenshot_btn.clicked.connect(self.take_screenshot)
-        top_bar.addWidget(self.screenshot_btn)
-        # =======================================
-        
+        # ========== 手动截图按钮 ==========
+        self.snip_btn = QPushButton("手动截图")
+        self.snip_btn.setStyleSheet("background-color: #FF9800; color:white;")
+        self.snip_btn.clicked.connect(self.start_manual_snip)
+        top_bar.addWidget(self.snip_btn)
+        # =================================
+
         top_bar.addStretch()
         
         self.loop_check = QComboBox()
@@ -440,26 +441,27 @@ class RPAWindow(QMainWindow):
         # 初始添加一行
         self.add_row()
 
-    # ========== 【新增：截图功能函数】 ==========
-    def take_screenshot(self):
+    # ========== 手动截图核心逻辑 ==========
+    def start_manual_snip(self):
+        self.showMinimized()
+        QTimer.singleShot(300, self.do_snip)
+
+    def do_snip(self):
         try:
-            # 创建保存目录
+            screen = QGuiApplication.primaryScreen()
+            full_pix = screen.grabWindow(0)
             save_dir = "screenshots"
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir)
-            
-            # 生成带时间戳的文件名
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            save_path = os.path.join(save_dir, f"截图_{timestamp}.png")
-            
-            # 执行截图
-            pyautogui.screenshot(save_path)
-            self.log(f"✅ 截图成功：{save_path}")
-            QMessageBox.information(self, "成功", f"截图已保存！\n{save_path}")
+            os.makedirs(save_dir, exist_ok=True)
+            filename = f"snip_{int(time.time())}.png"
+            path = os.path.join(save_dir, filename)
+            full_pix.save(path, "png")
+            self.log(f"手动截图保存：{path}")
+            QMessageBox.information(self, "截图成功", f"已保存到：\n{path}")
         except Exception as e:
-            self.log(f"❌ 截图失败：{str(e)}")
-            QMessageBox.critical(self, "错误", f"截图失败：{str(e)}")
-    # ===========================================
+            self.log(f"截图失败：{e}")
+        finally:
+            self.showNormal()
+    # ====================================
 
     def add_row(self, data=None):
         # 移除底部的弹簧
